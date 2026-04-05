@@ -1,0 +1,3 @@
+{
+  "routes": [{ "src": "/api/canvas", "dest": "/api/canvas.js" }]
+}
