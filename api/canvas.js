@@ -7,10 +7,9 @@ const {
   LeaderboardBuilder,
 } = require("canvacord");
 
-// Load default font
 Font.loadDefault();
 
-// ---------- Custom Greetings Card ----------
+// ---------- Custom Greetings Card (tidak berubah) ----------
 class GreetingsCard extends Builder {
   constructor() {
     super(930, 280);
@@ -88,7 +87,6 @@ class GreetingsCard extends Builder {
   }
 }
 
-// Helper untuk mengirim response dengan CORS headers
 function setCorsHeaders(res) {
   res.setHeader("Access-Control-Allow-Origin", "*");
   res.setHeader("Access-Control-Allow-Methods", "GET, POST, OPTIONS");
@@ -96,17 +94,15 @@ function setCorsHeaders(res) {
 }
 
 module.exports = async (req, res) => {
-  // Set CORS headers untuk semua response
   setCorsHeaders(res);
 
-  // Handle preflight OPTIONS request
   if (req.method === "OPTIONS") {
     return res.status(200).end();
   }
 
   const { type } = req.query;
 
-  // --- Leaderboard (hanya POST) ---
+  // --- LEADERBOARD (POST) ---
   if (type === "leaderboard") {
     if (req.method !== "POST") {
       return res.status(405).json({ error: "Leaderboard requires POST method." });
@@ -115,17 +111,20 @@ module.exports = async (req, res) => {
     try {
       const { header, players, background, variant } = req.body;
 
-      if (!header || !players || !Array.isArray(players)) {
-        return res.status(400).json({ error: "Missing header or players array." });
+      if (!players || !Array.isArray(players)) {
+        return res.status(400).json({ error: "Missing players array." });
       }
+
+      // Pastikan header memiliki gambar grup dan jumlah member
+      const safeHeader = {
+        title: header?.title || "Leaderboard",
+        image: header?.image || "https://github.com/neplextech.png", // default group image
+        subtitle: header?.subtitle || "0 members", // default member count
+      };
 
       const limitedPlayers = players.slice(0, 10);
       const lb = new LeaderboardBuilder()
-        .setHeader({
-          title: header.title || "Leaderboard",
-          image: header.image || "",
-          subtitle: header.subtitle || "",
-        })
+        .setHeader(safeHeader)
         .setPlayers(limitedPlayers);
 
       if (background) lb.setBackground(background);
@@ -143,7 +142,7 @@ module.exports = async (req, res) => {
     }
   }
 
-  // --- Endpoint lainnya (welcome/goodbye/rank) hanya GET ---
+  // --- RANK, WELCOME, GOODBYE (GET) ---
   if (req.method !== "GET") {
     return res.status(405).json({ error: "Method not allowed. Use GET for rank/welcome/goodbye, or POST for leaderboard." });
   }
