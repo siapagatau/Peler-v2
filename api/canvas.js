@@ -1,9 +1,16 @@
-const { RankCardBuilder, Font, Builder, JSX, loadImage } = require("canvacord");
+const {
+  RankCardBuilder,
+  Font,
+  Builder,
+  JSX,
+  loadImage,
+  LeaderboardBuilder,
+} = require("canvacord");
 
-// Load default font (wajib)
+// Load default font
 Font.loadDefault();
 
-// ---------- Custom Greetings Card (Welcome/Goodbye) ----------
+// ---------- Custom Greetings Card ----------
 class GreetingsCard extends Builder {
   constructor() {
     super(930, 280);
@@ -14,31 +21,27 @@ class GreetingsCard extends Builder {
       message: "",
     });
   }
-
   setDisplayName(value) {
     this.options.set("displayName", value);
     return this;
   }
-
   setType(value) {
     this.options.set("type", value);
     return this;
   }
-
   setAvatar(value) {
     this.options.set("avatar", value);
     return this;
   }
-
   setMessage(value) {
     this.options.set("message", value);
     return this;
   }
-
   async render() {
     const { type, displayName, avatar, message } = this.options.getOptions();
-    const image = await loadImage(avatar || "https://cdn.discordapp.com/embed/avatars/0.png");
-
+    const image = await loadImage(
+      avatar || "https://cdn.discordapp.com/embed/avatars/0.png"
+    );
     return JSX.createElement(
       "div",
       {
@@ -74,7 +77,10 @@ class GreetingsCard extends Builder {
           JSX.createElement(
             "p",
             { className: "text-gray-300 text-3xl m-0 mt-2" },
-            message || (type === "welcome" ? "Thanks for joining!" : "See you later!")
+            message ||
+              (type === "welcome"
+                ? "Thanks for joining!"
+                : "See you later!")
           )
         )
       )
@@ -82,34 +88,75 @@ class GreetingsCard extends Builder {
   }
 }
 
-// ---------- Vercel Serverless Function ----------
+// Helper untuk mengirim response dengan CORS headers
+function setCorsHeaders(res) {
+  res.setHeader("Access-Control-Allow-Origin", "*");
+  res.setHeader("Access-Control-Allow-Methods", "GET, POST, OPTIONS");
+  res.setHeader("Access-Control-Allow-Headers", "Content-Type");
+}
+
 module.exports = async (req, res) => {
-  if (req.method !== "GET") {
-    return res.status(405).json({ error: "Method not allowed. Use GET." });
+  // Set CORS headers untuk semua response
+  setCorsHeaders(res);
+
+  // Handle preflight OPTIONS request
+  if (req.method === "OPTIONS") {
+    return res.status(200).end();
   }
 
-  const { type, ...params } = req.query;
+  const { type } = req.query;
+
+  // --- Leaderboard (hanya POST) ---
+  if (type === "leaderboard") {
+    if (req.method !== "POST") {
+      return res.status(405).json({ error: "Leaderboard requires POST method." });
+    }
+
+    try {
+      const { header, players, background, variant } = req.body;
+
+      if (!header || !players || !Array.isArray(players)) {
+        return res.status(400).json({ error: "Missing header or players array." });
+      }
+
+      const limitedPlayers = players.slice(0, 10);
+      const lb = new LeaderboardBuilder()
+        .setHeader({
+          title: header.title || "Leaderboard",
+          image: header.image || "",
+          subtitle: header.subtitle || "",
+        })
+        .setPlayers(limitedPlayers);
+
+      if (background) lb.setBackground(background);
+      if (variant === "horizontal") lb.setVariant("horizontal");
+      else lb.setVariant("default");
+
+      const imageBuffer = await lb.build({ format: "png" });
+
+      res.setHeader("Content-Type", "image/png");
+      res.setHeader("Cache-Control", "public, max-age=60");
+      return res.send(imageBuffer);
+    } catch (err) {
+      console.error(err);
+      return res.status(500).json({ error: "Failed to generate leaderboard", detail: err.message });
+    }
+  }
+
+  // --- Endpoint lainnya (welcome/goodbye/rank) hanya GET ---
+  if (req.method !== "GET") {
+    return res.status(405).json({ error: "Method not allowed. Use GET for rank/welcome/goodbye, or POST for leaderboard." });
+  }
 
   if (!type) {
-    return res.status(400).json({ error: "Missing 'type' parameter. Use 'welcome', 'goodbye', or 'rank'." });
+    return res.status(400).json({ error: "Missing 'type' parameter." });
   }
 
   try {
     let imageBuffer;
 
     if (type === "rank") {
-      const {
-        username,
-        displayName,
-        avatar,
-        currentXP,
-        requiredXP,
-        level,
-        rank,
-        status,
-        background,
-      } = params;
-
+      const { username, displayName, avatar, currentXP, requiredXP, level, rank, status, background } = req.query;
       const card = new RankCardBuilder()
         .setDisplayName(displayName || username || "User")
         .setUsername(username ? `@${username}` : undefined)
@@ -119,35 +166,22 @@ module.exports = async (req, res) => {
         .setLevel(parseInt(level) || 1)
         .setRank(parseInt(rank) || 1)
         .setOverlay(90);
-
-      if (status && ["online", "idle", "dnd", "offline"].includes(status)) {
-        card.setStatus(status);
-      }
-
-      if (background) {
-        if (background.startsWith("#")) {
-          card.setBackground(background);
-        } else {
-          card.setBackground(background); // URL atau path lokal
-        }
-      } else {
-        card.setBackground("#2C2F33");
-      }
-
+      if (status && ["online", "idle", "dnd", "offline"].includes(status)) card.setStatus(status);
+      if (background) card.setBackground(background);
+      else card.setBackground("#2C2F33");
       imageBuffer = await card.build({ format: "png" });
     } 
     else if (type === "welcome" || type === "goodbye") {
-      const { displayName, avatar, message } = params;
+      const { displayName, avatar, message } = req.query;
       const card = new GreetingsCard()
         .setType(type)
         .setDisplayName(displayName || "User")
         .setAvatar(avatar || "https://cdn.discordapp.com/embed/avatars/0.png")
         .setMessage(message || (type === "welcome" ? "Welcome to the server!" : "We'll miss you!"));
-
       imageBuffer = await card.build({ format: "png" });
-    }
+    } 
     else {
-      return res.status(400).json({ error: "Invalid type. Use 'welcome', 'goodbye', or 'rank'." });
+      return res.status(400).json({ error: "Invalid type. Use 'welcome', 'goodbye', 'rank', or 'leaderboard'." });
     }
 
     res.setHeader("Content-Type", "image/png");
