@@ -6,14 +6,6 @@ const {
   loadImage,
   LeaderboardBuilder,
 } = require("canvacord");
-const ffmpeg = require("fluent-ffmpeg");
-const ffmpegPath = require("ffmpeg-static");
-const axios = require("axios");
-const { PassThrough } = require("stream");
-const path = require("path");
-
-// Set path ffmpeg
-ffmpeg.setFfmpegPath(ffmpegPath);
 
 Font.loadDefault();
 
@@ -101,74 +93,6 @@ function setCorsHeaders(res) {
   res.setHeader("Access-Control-Allow-Headers", "Content-Type");
 }
 
-/**
- * Konversi media (gambar/GIF/video) ke WebP menggunakan ffmpeg
- * @param {string} url - URL file media
- * @param {number} quality - Kualitas WebP (0-100)
- * @returns {Promise<Buffer>} - Buffer hasil konversi WebP
- */
-async function convertToWebP1(url, quality = 80) {
-  const response = await axios({
-    method: "GET",
-    url: url,
-    responseType: "stream",
-  });
-
-  const inputStream = response.data;
-  const outputStream = new PassThrough();
-  const chunks = [];
-
-  return new Promise((resolve, reject) => {
-    outputStream.on("data", (chunk) => chunks.push(chunk));
-    outputStream.on("end", () => resolve(Buffer.concat(chunks)));
-    outputStream.on("error", reject);
-
-    ffmpeg(inputStream)
-      .inputOptions(["-analyzeduration 10M", "-probesize 10M"])
-      // 🔽 Tambahkan filter scale untuk stretch ke 512x512
-      .videoFilter("scale=512:512") 
-      .outputOptions([
-        "-c:v libwebp",
-        `-quality ${quality}`,
-        "-loop 0",
-        "-preset default",
-        "-an", // hapus audio
-      ])
-      .format("webp")
-      .on("error", (err) => reject(new Error(`FFmpeg error: ${err.message}`)))
-      .pipe(outputStream, { end: true });
-  });
-}
-
-async function convertToWebP(url, quality = 80) {
-  const response = await axios({ method: "GET", url, responseType: "stream" });
-  const inputStream = response.data;
-  const outputStream = new PassThrough();
-  const chunks = [];
-
-  return new Promise((resolve, reject) => {
-    outputStream.on("data", (chunk) => chunks.push(chunk));
-    outputStream.on("end", () => resolve(Buffer.concat(chunks)));
-    outputStream.on("error", reject);
-
-    ffmpeg(inputStream)
-      .inputOptions(["-analyzeduration 10M", "-probesize 10M"])
-      .videoFilter("scale=512:512") // stretch tetap dipertahankan
-      .outputOptions([
-        "-c:v libwebp_anim",      // gunakan encoder animasi
-        `-quality ${quality}`,
-        "-loop 0",                // looping tak terbatas
-        "-vsync 0",               // pertahankan timing asli
-        "-g 1",                   // keyframe tiap frame (animasi lancar)
-        "-pix_fmt yuv420p",       // kompatibilitas maksimal
-        "-an"                     // hapus audio
-      ])
-      .format("webp")
-      .on("error", (err) => reject(new Error(`FFmpeg error: ${err.message}`)))
-      .pipe(outputStream, { end: true });
-  });
-}
-
 module.exports = async (req, res) => {
   setCorsHeaders(res);
 
@@ -177,41 +101,6 @@ module.exports = async (req, res) => {
   }
 
   const { type } = req.query;
-
-  // --- CONVERT MEDIA TO WEBP (GET dengan URL) ---
-  if (type === "convert") {
-    if (req.method !== "GET") {
-      return res.status(405).json({ error: "Convert hanya mendukung metode GET." });
-    }
-
-    const { url, quality } = req.query;
-    if (!url) {
-      return res.status(400).json({ error: "Parameter 'url' wajib diisi." });
-    }
-
-    // Validasi URL
-    try {
-      new URL(url);
-    } catch {
-      return res.status(400).json({ error: "URL tidak valid." });
-    }
-
-    const q = parseInt(quality) || 80;
-    if (q < 0 || q > 100) {
-      return res.status(400).json({ error: "Quality harus antara 0-100." });
-    }
-
-    try {
-      const webpBuffer = await convertToWebP(url, q);
-      res.setHeader("Content-Type", "image/webp");
-      res.setHeader("Cache-Control", "public, max-age=3600");
-      res.send(webpBuffer);
-    } catch (err) {
-      console.error(err);
-      res.status(500).json({ error: "Gagal konversi ke WebP", detail: err.message });
-    }
-    return;
-  }
 
   // --- LEADERBOARD (POST) ---
   if (type === "leaderboard") {
@@ -226,10 +115,11 @@ module.exports = async (req, res) => {
         return res.status(400).json({ error: "Missing players array." });
       }
 
+      // Pastikan header memiliki gambar grup dan jumlah member
       const safeHeader = {
         title: header?.title || "Leaderboard",
-        image: header?.image || "https://github.com/neplextech.png",
-        subtitle: header?.subtitle || "0 members",
+        image: header?.image || "https://github.com/neplextech.png", // default group image
+        subtitle: header?.subtitle || "0 members", // default member count
       };
 
       const limitedPlayers = players.slice(0, 10);
